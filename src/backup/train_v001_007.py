@@ -124,12 +124,13 @@ class ModelExtractionCallback(object):
         # return boosting round when early stopping.
         return self._model.best_iteration
 
+TOP_IMP_ONLY = True
 
-# In[3]:
+DATA_VERSION = __file__.split("_")[-2]
+TRIAL_NO = __file__.split("_")[-1].replace(".py","")
+# DATA_VERSION = "v001"
+# TRIAL_NO = "006"
 
-
-DATA_VERSION = "v001"
-TRIAL_NO = "005"
 save_path = Path(f"../processed/{DATA_VERSION}")
 save_path.mkdir(parents=True, exist_ok=True)
 model_path = Path(f"../model/{DATA_VERSION}_{TRIAL_NO}")
@@ -162,14 +163,19 @@ if mol_type==0:
 elif mol_type==1:
     train_type_cut = np.load("../processed/v001/train_type1_cut.npy", )
     test_type_cut = np.load("../processed/v001/test_type1_cut.npy", )
+    remove_cols = np.load("../model/v001_005/low_importance_1.npy", )
 elif mol_type==2:
     train_type_cut = np.load("../processed/v001/train_type2_cut.npy", )
     test_type_cut = np.load("../processed/v001/test_type2_cut.npy", )
+    remove_cols = np.load("../model/v001_005/low_importance_2.npy", )
 elif mol_type==3:
     test_type_cut = np.load("../processed/v001/test_type3_cut.npy", )
     train_type_cut = np.load("../processed/v001/train_type3_cut.npy", )
+    remove_cols = np.load("../model/v001_005/low_importance_3.npy", )
 else:
     assert False, f"mol_type should be 0, 1, 2, 3. mol_type: {mol_type}"
+
+use_cols = [c for c in train.columns if c not in remove_cols]
 
 if mol_type in [1,2,3]:
     train = train[train_type_cut]
@@ -177,11 +183,16 @@ if mol_type in [1,2,3]:
     y = y[train_type_cut]
     groups = groups[train_type_cut]
 
+if TOP_IMP_ONLY:
+    train = train[use_cols]
+    test  = test[use_cols]
 
 groups = pd.Series(groups).value_counts().sort_index().values
 print(f"groups: {groups.shape}")
 
 categorical = ['atom_index_0', 'atom_index_1', 'atom_1', 'atom_0', 'type_0', 'type']
+categorical = [c for c in categorical if c not in remove_cols]
+
 lgbm_params = {
     "boosting_type": "gbdt",
     'objective': 'regression',
@@ -214,6 +225,11 @@ class ModelSaveCallback(object):
         if env.iteration % self.save_interval == 0:
             for i, booster in enumerate(env.model.boosters):
                 booster.save_model(f"{self.save_path}/booster_{mol_type}_{i:02d}_{env.iteration}.model")
+                try:
+                    rm_iter = env.iteration - self.save_interval
+                    os.remove(f"{self.save_path}/booster_{mol_type}_{i:02d}_{rm_iter}.model")
+                except:
+                    pass
 
 lgb_train = lgb.Dataset(train, y, group=groups)
 
@@ -235,7 +251,7 @@ ret = lgb.cv(params=lgbm_params,
                train_set=lgb_train,
                categorical_feature=categorical,
                folds=folds,
-               num_boost_round=30000,
+               num_boost_round=100000,
                verbose_eval = 500,
                early_stopping_rounds=200,
                callbacks=callbacks,
@@ -269,6 +285,8 @@ y_pred_proba_list = proxy.predict(test, num_iteration=best_iteration)
 y_pred_proba_avg = np.array(y_pred_proba_list).mean(axis=0)
 
 sub = pd.read_csv('../input/sample_submission.csv')
+if mol_type in [1,2,3]:
+    sub = sub[train_type_cut]
 sub['scalar_coupling_constant'] = y_pred_proba_avg
 sub.to_csv(submit_path/f'submission_{mol_type}.csv', index=False)
 sub.head()
