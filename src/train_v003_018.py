@@ -1,94 +1,38 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import numpy as np
-import pandas as pd
 import os
 import sys
-
+import os
+import datetime
+import json
+import gc
+import time
+import numpy as np
+import pandas as pd
 from pathlib import Path
-import matplotlib.pyplot as plt
-# %matplotlib inline
-from tqdm import tqdm_notebook
+from sklearn import metrics
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
-# pd.options.display.precision = 15
+from numba import jit
 
-import lightgbm as lgb
-import xgboost as xgb
-import time
-import datetime
-from catboost import CatBoostRegressor
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import StratifiedKFold, KFold, RepeatedKFold
-from sklearn import metrics
-from sklearn import linear_model
-import gc
-import seaborn as sns
+from sklearn.model_selection import StratifiedKFold, KFold, RepeatedKFold, GroupKFold
 import warnings
 warnings.filterwarnings("ignore")
 
-from IPython.display import HTML
-import json
-# import altair as alt
-
-import networkx as nx
-import matplotlib.pyplot as plt
-# alt.renderers.enable('notebook')
-
 sys.path.append('..')
 from lib.line_notif import send_message
-from lib.utils import reduce_mem_usage, current_time, unpickle, to_pickle
+from lib.utils import current_time, unpickle, to_pickle, reduce_mem_usage
 
-import os
-import time
-import datetime
-import json
-import gc
-from numba import jit
-
-import numpy as np
-import pandas as pd
+sys.path.append(".")
+import use_cols
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tqdm import tqdm_notebook
-
 import lightgbm as lgb
 import xgboost as xgb
-from catboost import CatBoostRegressor, CatBoostClassifier
-from sklearn import metrics
-
-from itertools import product
-
-def reduce_mem_usage(df, verbose=True):
-    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
-    start_mem = df.memory_usage().sum() / 1024 ** 2
-    for col in df.columns:
-        col_type = df[col].dtypes
-        if col_type in numerics:
-            c_min = df[col].min()
-            c_max = df[col].max()
-            if str(col_type)[:3] == 'int':
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)
-                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
-                    df[col] = df[col].astype(np.int64)
-            else:
-                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
-                    df[col] = df[col].astype(np.float16)
-                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
-                    df[col] = df[col].astype(np.float32)
-                else:
-                    df[col] = df[col].astype(np.float64)
-    end_mem = df.memory_usage().sum() / 1024 ** 2
-    if verbose: print('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (
-                start_mem - end_mem) / start_mem))
-    return df
+from catboost import CatBoostRegressor
 
 
 def group_mean_log_mae(y_true, y_pred, types, floor=1e-9):
@@ -217,12 +161,12 @@ def train_model_regression(X, X_test, y, params, folds, model_type='lgb', eval_m
             feature_importance = pd.concat([feature_importance, fold_importance], axis=0)
         model_list += [model]
     prediction /= folds.n_splits
-
-    cv_score_msg = 'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
-    print(cv_score_msg)
     try:
+        cv_score_msg = f'{DATA_VERSION}_{TRIAL_NO}' +'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
+        print(cv_score_msg)
         send_message(cv_score_msg)
-    except:
+    except Exception as e:
+        print(e)
         pass
 
     result_dict["models"] = model_list
@@ -372,71 +316,6 @@ def map_ob_charges(df, atom_idx):
     df = df.rename(columns={c:f"{c}_{atom_idx}" for c in ob_charges_col})
     return df
 
-good_columns = [
-'molecule_atom_index_0_dist_min',
-'molecule_atom_index_0_dist_max',
-'molecule_atom_index_1_dist_min',
-'molecule_atom_index_0_dist_mean',
-'molecule_atom_index_0_dist_std',
-'dist', 'abs_dist',
-'x_0', 'y_0', 'z_0',
-'x_1', 'y_1', 'z_1',
-'molecule_atom_index_1_dist_std',
-'molecule_atom_index_1_dist_max',
-'molecule_atom_index_1_dist_mean',
-'molecule_atom_index_0_dist_max_diff',
-'molecule_atom_index_0_dist_max_div',
-'molecule_atom_index_0_dist_std_diff',
-'molecule_atom_index_0_dist_std_div',
-'atom_0_couples_count',
-'molecule_atom_index_0_dist_min_div',
-'molecule_atom_index_1_dist_std_diff',
-'molecule_atom_index_0_dist_mean_div',
-'atom_1_couples_count',
-'molecule_atom_index_0_dist_mean_diff',
-'molecule_couples',
-'atom_index_1',
-'molecule_dist_mean',
-'molecule_atom_index_1_dist_max_diff',
-'molecule_atom_index_0_y_1_std',
-'molecule_atom_index_1_dist_mean_diff',
-'molecule_atom_index_1_dist_std_div',
-'molecule_atom_index_1_dist_mean_div',
-'molecule_atom_index_1_dist_min_diff',
-'molecule_atom_index_1_dist_min_div',
-'molecule_atom_index_1_dist_max_div',
-'molecule_atom_index_0_z_1_std',
-'molecule_type_dist_std_diff',
-'molecule_atom_1_dist_min_diff',
-'molecule_atom_index_0_x_1_std',
-'molecule_dist_min',
-'molecule_atom_index_0_dist_min_diff',
-'molecule_atom_index_0_y_1_mean_diff',
-'molecule_type_dist_min',
-'molecule_atom_1_dist_min_div',
-'atom_index_0',
-'molecule_dist_max',
-'molecule_atom_1_dist_std_diff',
-'molecule_type_dist_max',
-'molecule_atom_index_0_y_1_max_diff',
-'molecule_type_0_dist_std_diff',
-'molecule_type_dist_mean_diff',
-'molecule_atom_1_dist_mean',
-'molecule_atom_index_0_y_1_mean_div',
-'molecule_type_dist_mean_div',
-'type', "f004:angle", "f004:angle_abs",
-# "f003:cos_0_1", "f003:cos_1",
-"f006:dist_origin_mean", # "f006:mass_0", "f006:mass_1",
-"f006:dist_from_origin_0", "f006:dist_from_origin_1",
-'Angle', 'Torsion', 'cos2T', 'cosT', 'sp',
-'dist_xy', 'dist_xz', 'dist_yz',
-"C","F","H","N","O",
-'eem_0', 'mmff94_0', 'gasteiger_0', 'qeq_0', 'qtpie_0', 'eem2015ha_0',
-'eem2015hm_0', 'eem2015hn_0', 'eem2015ba_0', 'eem2015bm_0', 'eem2015bn_0',
-'eem_1', 'mmff94_1', 'gasteiger_1', 'qeq_1', 'qtpie_1', 'eem2015ha_1',
-'eem2015hm_1', 'eem2015hn_1', 'eem2015ba_1', 'eem2015bm_1', 'eem2015bn_1'
-]
-
 
 ####################################################################################################
 # Setting
@@ -459,97 +338,118 @@ log_path.mkdir(parents=True, exist_ok=True)
 
 ####################################################################################################
 # Data Loading
-
 file_folder = '../input'
-train = pd.read_csv(f'{file_folder}/train.csv')
-test = pd.read_csv(f'{file_folder}/test.csv')
 sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
-structures = pd.read_csv(f'{file_folder}/structures.csv')
-scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
-train_cos = unpickle("../processed/v001/train_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
-test_cos = unpickle("../processed/v001/test_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
 
-# train_angle_add = unpickle("../processed/v003/train_005.df.pkl", )
-# test_angle_add = unpickle("../processed/v003/test_005.df.pkl", )
+if True:
+    train = pd.read_csv(f'{file_folder}/train.csv')
+    test = pd.read_csv(f'{file_folder}/test.csv')
+    structures = pd.read_csv(f'{file_folder}/structures.csv')
+    scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
 
-train_add = unpickle("../processed/v003/train_006.df.pkl", )
-test_add = unpickle("../processed/v003/test_006.df.pkl", )
+    train_cos = unpickle(save_path/"train_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
+    test_cos = unpickle(save_path/"test_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
 
-babel_cols = ['id', 'Angle', 'Torsion', 'cos2T', 'cosT', 'sp']
-babel_train = pd.read_csv("../processed/v003/babel_train.csv", usecols=babel_cols)
-babel_test = pd.read_csv("../processed/v003/babel_test.csv", usecols=babel_cols)
+    train_add = unpickle(save_path/"train_006.df.pkl", )
+    test_add = unpickle(save_path/"test_006.df.pkl", )
 
-####################################################################################################
-# Feature Engineering
+    babel_train = pd.read_csv(save_path/"babel_train.csv", usecols=use_cols.babel_cols)
+    babel_test = pd.read_csv(save_path/"babel_test.csv", usecols=use_cols.babel_cols)
 
-train = pd.merge(train, scalar_coupling_contributions, how = 'left',
-                  left_on  = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'],
-                  right_on = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'])
+    use_cols.good_columns += [c for c in use_cols.rdkit_cols if c != 'id']
+    rdkit_train = pd.read_csv(save_path/"rdkit_train.csv", usecols=use_cols.rdkit_cols)
+    rdkit_test = pd.read_csv(save_path/"rdkit_test.csv", usecols=use_cols.rdkit_cols)
 
-train = map_atom_info(train, 0)
-train = map_atom_info(train, 1)
-test = map_atom_info(test, 0)
-test = map_atom_info(test, 1)
+    coulomb_train = pd.read_csv(save_path/"coulomb_interaction_train.csv")
+    coulomb_test = pd.read_csv(save_path/"coulomb_interaction_test.csv")
 
-train_p_0 = train[['x_0', 'y_0', 'z_0']].values
-train_p_1 = train[['x_1', 'y_1', 'z_1']].values
-test_p_0 = test[['x_0', 'y_0', 'z_0']].values
-test_p_1 = test[['x_1', 'y_1', 'z_1']].values
+    bond_calc_train = unpickle(save_path/"bond_calc_feat_train.pkl")
+    bond_calc_test = unpickle(save_path/"bond_calc_feat_test.pkl")
 
-train['dist'] = np.linalg.norm(train_p_0 - train_p_1, axis=1)
-test['dist'] = np.linalg.norm(test_p_0 - test_p_1, axis=1)
-train['dist_x'] = (train['x_0'] - train['x_1']) ** 2
-test['dist_x'] = (test['x_0'] - test['x_1']) ** 2
-train['dist_y'] = (train['y_0'] - train['y_1']) ** 2
-test['dist_y'] = (test['y_0'] - test['y_1']) ** 2
-train['dist_z'] = (train['z_0'] - train['z_1']) ** 2
-test['dist_z'] = (test['z_0'] - test['z_1']) ** 2
+    ob_charges = pd.read_csv(save_path/"ob_charges.csv", index_col=0)
 
-train['type_0'] = train['type'].apply(lambda x: x[0])
-test['type_0'] = test['type'].apply(lambda x: x[0])
+    ####################################################################################################
+    # Feature Engineering
 
-train['abs_dist'] = np.linalg.norm(train_p_0-train_p_1,axis=1,ord=1)
-test['abs_dist'] = np.linalg.norm(test_p_0-test_p_1,axis=1,ord=1)
-dist12('dist_xy','x','y')
-dist12('dist_xz','x','z')
-dist12('dist_yz','y','z')
+    train = pd.merge(train, scalar_coupling_contributions, how = 'left',
+                      left_on  = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'],
+                      right_on = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'])
 
-atom_count = structures.groupby(['molecule_name', 'atom']).size().unstack(fill_value=0)
-train = pd.merge(train, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
-test = pd.merge(test, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
+    train = map_atom_info(train, 0)
+    train = map_atom_info(train, 1)
+    test = map_atom_info(test, 0)
+    test = map_atom_info(test, 1)
 
-train = create_features(train)
-test = create_features(test)
+    train_p_0 = train[['x_0', 'y_0', 'z_0']].values
+    train_p_1 = train[['x_1', 'y_1', 'z_1']].values
+    test_p_0 = test[['x_0', 'y_0', 'z_0']].values
+    test_p_1 = test[['x_1', 'y_1', 'z_1']].values
 
-angle_df_train, angle_df_test = angle_feature_conv()
-train = train.merge(angle_df_train, on="id", how="left") # .merge(train_cos,  on="id", how="left")
-test = test.merge(angle_df_test, on="id", how="left") # .merge(test_cos,  on="id", how="left")
-# train = train.merge(train_angle_add, on="id", how="left")
-# test = test.merge(test_angle_add, on="id", how="left")
-train = train.merge(train_add, on="id", how="left")
-test = test.merge(test_add, on="id", how="left")
+    train['dist'] = np.linalg.norm(train_p_0 - train_p_1, axis=1)
+    test['dist'] = np.linalg.norm(test_p_0 - test_p_1, axis=1)
+    train['dist_x'] = (train['x_0'] - train['x_1']) ** 2
+    test['dist_x'] = (test['x_0'] - test['x_1']) ** 2
+    train['dist_y'] = (train['y_0'] - train['y_1']) ** 2
+    test['dist_y'] = (test['y_0'] - test['y_1']) ** 2
+    train['dist_z'] = (train['z_0'] - train['z_1']) ** 2
+    test['dist_z'] = (test['z_0'] - test['z_1']) ** 2
 
-train = train.merge(babel_train, on="id", how="left")
-test = test.merge(babel_test, on="id", how="left")
+    train['type_0'] = train['type'].apply(lambda x: x[0])
+    test['type_0'] = test['type'].apply(lambda x: x[0])
 
-ob_charges = pd.read_csv("../processed/v003/ob_charges.csv", index_col=0)
-train = map_ob_charges(train, 0)
-train = map_ob_charges(train, 1)
-test = map_ob_charges(test, 0)
-test = map_ob_charges(test, 1)
+    train['abs_dist'] = np.linalg.norm(train_p_0-train_p_1,axis=1,ord=1)
+    test['abs_dist'] = np.linalg.norm(test_p_0-test_p_1,axis=1,ord=1)
+    dist12('dist_xy','x','y')
+    dist12('dist_xz','x','z')
+    dist12('dist_yz','y','z')
 
-train = reduce_mem_usage(train)
-test = reduce_mem_usage(test)
+    atom_count = structures.groupby(['molecule_name', 'atom']).size().unstack(fill_value=0)
+    train = pd.merge(train, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
+    test = pd.merge(test, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
 
-for f in ['atom_1', 'type_0', 'type']:
-    if f in good_columns:
-        lbl = LabelEncoder()
-        lbl.fit(list(train[f].values) + list(test[f].values))
-        train[f] = lbl.transform(list(train[f].values))
-        test[f] = lbl.transform(list(test[f].values))
+    train = create_features(train)
+    test = create_features(test)
 
-to_pickle(save_path/f"train_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
-to_pickle(save_path/f"test_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
+    angle_df_train, angle_df_test = angle_feature_conv()
+    train = train.merge(angle_df_train, on="id", how="left")
+    test = test.merge(angle_df_test, on="id", how="left")
+
+    train = train.merge(train_add, on="id", how="left")
+    test = test.merge(test_add, on="id", how="left")
+
+    train = train.merge(babel_train, on="id", how="left")
+    test = test.merge(babel_test, on="id", how="left")
+
+    train = train.merge(rdkit_train, on="id", how="left")
+    test = test.merge(rdkit_test, on="id", how="left")
+
+    train = train.merge(coulomb_train, on="id", how="left")
+    test = test.merge(coulomb_test, on="id", how="left")
+
+    train = train.merge(bond_calc_train, on="id", how="left")
+    test = test.merge(bond_calc_test, on="id", how="left")
+
+    train = map_ob_charges(train, 0)
+    train = map_ob_charges(train, 1)
+    test = map_ob_charges(test, 0)
+    test = map_ob_charges(test, 1)
+
+    train = reduce_mem_usage(train)
+    test = reduce_mem_usage(test)
+
+    for f in ['atom_1', 'type_0', 'type']:
+        if f in good_columns:
+            lbl = LabelEncoder()
+            lbl.fit(list(train[f].values) + list(test[f].values))
+            train[f] = lbl.transform(list(train[f].values))
+            test[f] = lbl.transform(list(test[f].values))
+
+    Path(save_path/f"{DATA_VERSION}_{TRIAL_NO}").mkdir(parents=True, exist_ok=True)
+    to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/train_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
+    to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/test_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
+else:
+    train = unpickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/train_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", )
+    test = unpickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/test_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", )
 
 X = train[good_columns].copy()
 y = train['scalar_coupling_constant']
@@ -562,8 +462,11 @@ pd.DataFrame({"columns": X.columns.tolist()}).to_csv(log_path/f"use_cols.csv")
 ####################################################################################################
 # Model Fitting
 n_fold = 5
+# folds = GroupKFold(n_splits=n_fold)
 folds = KFold(n_splits=n_fold, shuffle=True, random_state=11)
 
+#########################################################################################################
+# 1st layer model
 params = {'num_leaves': 128,
           'min_child_samples': 79,
           'objective': 'regression',
@@ -598,6 +501,9 @@ to_pickle(submit_path/f"train_oof_fc_{DATA_VERSION}_{TRIAL_NO}.pkl", X['oof_fc']
 to_pickle(submit_path/f"test_oof_fc_{DATA_VERSION}_{TRIAL_NO}.pkl", X_test['oof_fc'])
 to_pickle(model_path/f"first_model_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb1["models"])
 
+
+#########################################################################################################
+# 2nd layer model
 X_short = pd.DataFrame({'ind': list(X.index), 'type': X['type'].values, 'oof': [0] * len(X), 'target': y.values})
 X_short_test = pd.DataFrame({'ind': list(X_test.index), 'type': X_test['type'].values, 'prediction': [0] * len(X_test)})
 
@@ -607,6 +513,7 @@ for t in X['type'].unique():
     X_t = X.loc[X['type'] == t]
     X_test_t = X_test.loc[X_test['type'] == t]
     y_t = X_short.loc[X_short['type'] == t, 'target']
+    print(f"X_t.shape: {X_t.shape}, X_test_t.shape: {X_test_t.shape}")
     result_dict_lgb3 = train_model_regression(X=X_t,
                                               X_test=X_test_t,
                                               y=y_t,
@@ -626,6 +533,9 @@ for t in X['type'].unique():
     X_short_test.to_csv(submit_path/f"tmp_sub_{t}.csv")
     to_pickle(model_path/f"second_model_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb3["models"])
 
+#########################################################################################################
+# create oof & submission file.
+sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
 sub['scalar_coupling_constant'] = X_short_test['prediction']
 sub.to_csv(submit_path/f'submission_t_{DATA_VERSION}_{TRIAL_NO}.csv', index=False)
 print(sub.head())

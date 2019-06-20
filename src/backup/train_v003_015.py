@@ -20,7 +20,7 @@ import time
 import datetime
 from catboost import CatBoostRegressor
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import StratifiedKFold, KFold, RepeatedKFold
+from sklearn.model_selection import StratifiedKFold, KFold, RepeatedKFold, GroupKFold
 from sklearn import metrics
 from sklearn import linear_model
 import gc
@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 
 sys.path.append('..')
 from lib.line_notif import send_message
-from lib.utils import reduce_mem_usage, current_time, unpickle, to_pickle
+from lib.utils import current_time, unpickle, to_pickle
 
 import os
 import time
@@ -217,12 +217,12 @@ def train_model_regression(X, X_test, y, params, folds, model_type='lgb', eval_m
             feature_importance = pd.concat([feature_importance, fold_importance], axis=0)
         model_list += [model]
     prediction /= folds.n_splits
-
-    cv_score_msg = 'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
-    print(cv_score_msg)
     try:
+        cv_score_msg = f'{DATA_VERSION}_{TRIAL_NO}' +'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
+        print(cv_score_msg)
         send_message(cv_score_msg)
-    except:
+    except Exception as e:
+        print(e)
         pass
 
     result_dict["models"] = model_list
@@ -459,101 +459,125 @@ log_path.mkdir(parents=True, exist_ok=True)
 
 ####################################################################################################
 # Data Loading
-
 file_folder = '../input'
-train = pd.read_csv(f'{file_folder}/train.csv')
-test = pd.read_csv(f'{file_folder}/test.csv')
-sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
-structures = pd.read_csv(f'{file_folder}/structures.csv')
-scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
-train_cos = unpickle("../processed/v001/train_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
-test_cos = unpickle("../processed/v001/test_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
+if False:
+    train = pd.read_csv(f'{file_folder}/train.csv')
+    test = pd.read_csv(f'{file_folder}/test.csv')
+    sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
+    structures = pd.read_csv(f'{file_folder}/structures.csv')
+    scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
+    train_cos = unpickle("../processed/v001/train_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
+    test_cos = unpickle("../processed/v001/test_003.df.pkl", )[["id", "f003:cos_0_1", "f003:cos_1"]]
 
-# train_angle_add = unpickle("../processed/v003/train_005.df.pkl", )
-# test_angle_add = unpickle("../processed/v003/test_005.df.pkl", )
+    # train_angle_add = unpickle("../processed/v003/train_005.df.pkl", )
+    # test_angle_add = unpickle("../processed/v003/test_005.df.pkl", )
 
-train_add = unpickle("../processed/v003/train_006.df.pkl", )
-test_add = unpickle("../processed/v003/test_006.df.pkl", )
+    train_add = unpickle("../processed/v003/train_006.df.pkl", )
+    test_add = unpickle("../processed/v003/test_006.df.pkl", )
 
-babel_cols = ['id', 'Angle', 'Torsion', 'cos2T', 'cosT', 'sp']
-babel_train = pd.read_csv("../processed/v003/babel_train.csv", usecols=babel_cols)
-babel_test = pd.read_csv("../processed/v003/babel_test.csv", usecols=babel_cols)
+    babel_cols = ['id', 'Angle', 'Torsion', 'cos2T', 'cosT', 'sp']
+    babel_train = pd.read_csv("../processed/v003/babel_train.csv", usecols=babel_cols)
+    babel_test = pd.read_csv("../processed/v003/babel_test.csv", usecols=babel_cols)
 
-####################################################################################################
-# Feature Engineering
+    rdkit_cols = ['id', 'a1_degree', 'a1_hybridization',
+                  'a1_inring', 'a1_inring3', 'a1_inring4', 'a1_inring5', 'a1_inring6',
+                  'a1_inring7', 'a1_inring8', 'a1_nb_h', 'a1_nb_o', 'a1_nb_c', 'a1_nb_n',
+                  'a1_nb_na', 'a0_nb_degree', 'a0_nb_hybridization', 'a0_nb_inring',
+                  'a0_nb_inring3', 'a0_nb_inring4', 'a0_nb_inring5', 'a0_nb_inring6',
+                  'a0_nb_inring7', 'a0_nb_inring8', 'a0_nb_nb_h', 'a0_nb_nb_o',
+                  'a0_nb_nb_c', 'a0_nb_nb_n', 'a0_nb_nb_na', 'x_a0_nb', 'y_a0_nb',
+                  'z_a0_nb', 'a1_nb_degree', 'a1_nb_hybridization', 'a1_nb_inring',
+                  'a1_nb_inring3', 'a1_nb_inring4', 'a1_nb_inring5', 'a1_nb_inring6',
+                  'a1_nb_inring7', 'a1_nb_inring8', 'a1_nb_nb_h', 'a1_nb_nb_o',
+                  'a1_nb_nb_c', 'a1_nb_nb_n', 'a1_nb_nb_na', 'x_a1_nb', 'y_a1_nb',
+                  'z_a1_nb', 'dist_to_type_mean']
+    good_columns += [c for c in rdkit_cols if c != 'id']
+    rdkit_train = pd.read_csv("../processed/v003/rdkit_train.csv", usecols=rdkit_cols)
+    rdkit_test = pd.read_csv("../processed/v003/rdkit_test.csv", usecols=rdkit_cols)
 
-train = pd.merge(train, scalar_coupling_contributions, how = 'left',
-                  left_on  = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'],
-                  right_on = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'])
+    ####################################################################################################
+    # Feature Engineering
 
-train = map_atom_info(train, 0)
-train = map_atom_info(train, 1)
-test = map_atom_info(test, 0)
-test = map_atom_info(test, 1)
+    train = pd.merge(train, scalar_coupling_contributions, how = 'left',
+                      left_on  = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'],
+                      right_on = ['molecule_name', 'atom_index_0', 'atom_index_1', 'type'])
 
-train_p_0 = train[['x_0', 'y_0', 'z_0']].values
-train_p_1 = train[['x_1', 'y_1', 'z_1']].values
-test_p_0 = test[['x_0', 'y_0', 'z_0']].values
-test_p_1 = test[['x_1', 'y_1', 'z_1']].values
+    train = map_atom_info(train, 0)
+    train = map_atom_info(train, 1)
+    test = map_atom_info(test, 0)
+    test = map_atom_info(test, 1)
 
-train['dist'] = np.linalg.norm(train_p_0 - train_p_1, axis=1)
-test['dist'] = np.linalg.norm(test_p_0 - test_p_1, axis=1)
-train['dist_x'] = (train['x_0'] - train['x_1']) ** 2
-test['dist_x'] = (test['x_0'] - test['x_1']) ** 2
-train['dist_y'] = (train['y_0'] - train['y_1']) ** 2
-test['dist_y'] = (test['y_0'] - test['y_1']) ** 2
-train['dist_z'] = (train['z_0'] - train['z_1']) ** 2
-test['dist_z'] = (test['z_0'] - test['z_1']) ** 2
+    train_p_0 = train[['x_0', 'y_0', 'z_0']].values
+    train_p_1 = train[['x_1', 'y_1', 'z_1']].values
+    test_p_0 = test[['x_0', 'y_0', 'z_0']].values
+    test_p_1 = test[['x_1', 'y_1', 'z_1']].values
 
-train['type_0'] = train['type'].apply(lambda x: x[0])
-test['type_0'] = test['type'].apply(lambda x: x[0])
+    train['dist'] = np.linalg.norm(train_p_0 - train_p_1, axis=1)
+    test['dist'] = np.linalg.norm(test_p_0 - test_p_1, axis=1)
+    train['dist_x'] = (train['x_0'] - train['x_1']) ** 2
+    test['dist_x'] = (test['x_0'] - test['x_1']) ** 2
+    train['dist_y'] = (train['y_0'] - train['y_1']) ** 2
+    test['dist_y'] = (test['y_0'] - test['y_1']) ** 2
+    train['dist_z'] = (train['z_0'] - train['z_1']) ** 2
+    test['dist_z'] = (test['z_0'] - test['z_1']) ** 2
 
-train['abs_dist'] = np.linalg.norm(train_p_0-train_p_1,axis=1,ord=1)
-test['abs_dist'] = np.linalg.norm(test_p_0-test_p_1,axis=1,ord=1)
-dist12('dist_xy','x','y')
-dist12('dist_xz','x','z')
-dist12('dist_yz','y','z')
+    train['type_0'] = train['type'].apply(lambda x: x[0])
+    test['type_0'] = test['type'].apply(lambda x: x[0])
 
-atom_count = structures.groupby(['molecule_name', 'atom']).size().unstack(fill_value=0)
-train = pd.merge(train, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
-test = pd.merge(test, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
+    train['abs_dist'] = np.linalg.norm(train_p_0-train_p_1,axis=1,ord=1)
+    test['abs_dist'] = np.linalg.norm(test_p_0-test_p_1,axis=1,ord=1)
+    dist12('dist_xy','x','y')
+    dist12('dist_xz','x','z')
+    dist12('dist_yz','y','z')
 
-train = create_features(train)
-test = create_features(test)
+    atom_count = structures.groupby(['molecule_name', 'atom']).size().unstack(fill_value=0)
+    train = pd.merge(train, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
+    test = pd.merge(test, atom_count, how = 'left', left_on  = 'molecule_name', right_on = 'molecule_name')
 
-angle_df_train, angle_df_test = angle_feature_conv()
-train = train.merge(angle_df_train, on="id", how="left") # .merge(train_cos,  on="id", how="left")
-test = test.merge(angle_df_test, on="id", how="left") # .merge(test_cos,  on="id", how="left")
-# train = train.merge(train_angle_add, on="id", how="left")
-# test = test.merge(test_angle_add, on="id", how="left")
-train = train.merge(train_add, on="id", how="left")
-test = test.merge(test_add, on="id", how="left")
+    train = create_features(train)
+    test = create_features(test)
 
-train = train.merge(babel_train, on="id", how="left")
-test = test.merge(babel_test, on="id", how="left")
+    angle_df_train, angle_df_test = angle_feature_conv()
+    train = train.merge(angle_df_train, on="id", how="left") # .merge(train_cos,  on="id", how="left")
+    test = test.merge(angle_df_test, on="id", how="left") # .merge(test_cos,  on="id", how="left")
+    # train = train.merge(train_angle_add, on="id", how="left")
+    # test = test.merge(test_angle_add, on="id", how="left")
+    train = train.merge(train_add, on="id", how="left")
+    test = test.merge(test_add, on="id", how="left")
 
-ob_charges = pd.read_csv("../processed/v003/ob_charges.csv", index_col=0)
-train = map_ob_charges(train, 0)
-train = map_ob_charges(train, 1)
-test = map_ob_charges(test, 0)
-test = map_ob_charges(test, 1)
+    train = train.merge(babel_train, on="id", how="left")
+    test = test.merge(babel_test, on="id", how="left")
 
-train = reduce_mem_usage(train)
-test = reduce_mem_usage(test)
+    train = train.merge(rdkit_train, on="id", how="left")
+    test = test.merge(rdkit_test, on="id", how="left")
 
-for f in ['atom_1', 'type_0', 'type']:
-    if f in good_columns:
-        lbl = LabelEncoder()
-        lbl.fit(list(train[f].values) + list(test[f].values))
-        train[f] = lbl.transform(list(train[f].values))
-        test[f] = lbl.transform(list(test[f].values))
+    ob_charges = pd.read_csv("../processed/v003/ob_charges.csv", index_col=0)
+    train = map_ob_charges(train, 0)
+    train = map_ob_charges(train, 1)
+    test = map_ob_charges(test, 0)
+    test = map_ob_charges(test, 1)
 
-to_pickle(save_path/f"train_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
-to_pickle(save_path/f"test_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
+    train = reduce_mem_usage(train)
+    test = reduce_mem_usage(test)
+
+    for f in ['atom_1', 'type_0', 'type']:
+        if f in good_columns:
+            lbl = LabelEncoder()
+            lbl.fit(list(train[f].values) + list(test[f].values))
+            train[f] = lbl.transform(list(train[f].values))
+            test[f] = lbl.transform(list(test[f].values))
+
+    to_pickle(save_path/f"train_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
+    to_pickle(save_path/f"test_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
+else:
+    train = unpickle(save_path/f"train_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", )
+    test = unpickle(save_path/f"test_concat_v003_{DATA_VERSION}_{TRIAL_NO}.pkl", )
+
+
 
 X = train[good_columns].copy()
 y = train['scalar_coupling_constant']
-y_fc = train['fc']
+y_dict = {c:train[c] for c in ['fc', 'sd', 'dso', 'pso']}
 X_test = test[good_columns].copy()
 
 # export colnames
@@ -562,41 +586,48 @@ pd.DataFrame({"columns": X.columns.tolist()}).to_csv(log_path/f"use_cols.csv")
 ####################################################################################################
 # Model Fitting
 n_fold = 5
+# folds = GroupKFold(n_splits=n_fold)
 folds = KFold(n_splits=n_fold, shuffle=True, random_state=11)
 
-params = {'num_leaves': 128,
-          'min_child_samples': 79,
-          'objective': 'regression',
-          'max_depth': 9,
-          'learning_rate': 0.2,
-          "boosting_type": "gbdt",
-          "subsample_freq": 1,
-          "subsample": 0.9,
-          "bagging_seed": 11,
-          "metric": 'mae',
-          "verbosity": -1,
-          'reg_alpha': 0.1,
-          'reg_lambda': 0.3,
-          'colsample_bytree': 1.0,
-          'num_threads' : -1,
-         }
+for oof_type in ['fc', 'sd', 'dso', 'pso']:
+    params = {'num_leaves': 128,
+              'min_child_samples': 79,
+              'objective': 'regression',
+              'max_depth': 9,
+              'learning_rate': 0.2,
+              "boosting_type": "gbdt",
+              "subsample_freq": 1,
+              "subsample": 0.9,
+              "bagging_seed": 11,
+              "metric": 'mae',
+              "verbosity": -1,
+              'reg_alpha': 0.1,
+              'reg_lambda': 0.3,
+              'colsample_bytree': 1.0,
+              'num_threads' : -1,
+             }
 
-result_dict_lgb1 = train_model_regression(X=X,
-                                          X_test=X_test,
-                                          y=y_fc,
-                                          params=params,
-                                          folds=folds,
-                                          model_type='lgb',
-                                          eval_metric='group_mae',
-                                          plot_feature_importance=False,
-                                          verbose=500,
-                                          early_stopping_rounds=200,
-                                          n_estimators=8000)
-X['oof_fc'] = result_dict_lgb1['oof']
-X_test['oof_fc'] = result_dict_lgb1['prediction']
-to_pickle(submit_path/f"train_oof_fc_{DATA_VERSION}_{TRIAL_NO}.pkl", X['oof_fc'])
-to_pickle(submit_path/f"test_oof_fc_{DATA_VERSION}_{TRIAL_NO}.pkl", X_test['oof_fc'])
-to_pickle(model_path/f"first_model_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb1["models"])
+    print(f"oof_type: {oof_type},  X_t.shape: {X.shape}, X_test_t.shape: {X_test.shape}")
+    if False:
+        result_dict_lgb1 = train_model_regression(X=X,
+                                                  X_test=X_test,
+                                                  y=y_dict[oof_type],#y_fc,
+                                                  params=params,
+                                                  folds=folds,
+                                                  model_type='lgb',
+                                                  eval_metric='group_mae',
+                                                  plot_feature_importance=False,
+                                                  verbose=500,
+                                                  early_stopping_rounds=200,
+                                                  n_estimators=8000)
+        X[f'oof_{oof_type}'] = result_dict_lgb1['oof']
+        X_test[f'oof_{oof_type}'] = result_dict_lgb1['prediction']
+        to_pickle(submit_path/f"train_oof_{oof_type}_{DATA_VERSION}_{TRIAL_NO}.pkl", X[f'oof_{oof_type}'])
+        to_pickle(submit_path/f"test_oof_{oof_type}_{DATA_VERSION}_{TRIAL_NO}.pkl", X_test[f'oof_{oof_type}'])
+        to_pickle(model_path/f"first_model_{oof_type}_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb1["models"])
+    else:
+        X[f'oof_{oof_type}'] = unpickle(submit_path/f"train_oof_{oof_type}_{DATA_VERSION}_{TRIAL_NO}.pkl", )
+        X_test[f'oof_{oof_type}'] = unpickle(submit_path/f"test_oof_{oof_type}_{DATA_VERSION}_{TRIAL_NO}.pkl", )
 
 X_short = pd.DataFrame({'ind': list(X.index), 'type': X['type'].values, 'oof': [0] * len(X), 'target': y.values})
 X_short_test = pd.DataFrame({'ind': list(X_test.index), 'type': X_test['type'].values, 'prediction': [0] * len(X_test)})
@@ -607,6 +638,8 @@ for t in X['type'].unique():
     X_t = X.loc[X['type'] == t]
     X_test_t = X_test.loc[X_test['type'] == t]
     y_t = X_short.loc[X_short['type'] == t, 'target']
+    # mol_name_t = mol_name[X_t.index]
+    print(f"X_t.shape: {X_t.shape}, X_test_t.shape: {X_test_t.shape}, len(y_t): {len(y_t)}")
     result_dict_lgb3 = train_model_regression(X=X_t,
                                               X_test=X_test_t,
                                               y=y_t,
@@ -622,10 +655,12 @@ for t in X['type'].unique():
     X_short.loc[X_short['type'] == t, 'oof'] = result_dict_lgb3['oof']
     X_short_test.loc[X_short_test['type'] == t, 'prediction'] = result_dict_lgb3['prediction']
 
-    X_short.to_csv(submit_path/f"tmp_oof_{t}.csv")
-    X_short_test.to_csv(submit_path/f"tmp_sub_{t}.csv")
+    X_short.to_csv(submit_path/f"tmp_oof_{DATA_VERSION}_{TRIAL_NO}_{t}.csv")
+    X_short_test.to_csv(submit_path/f"tmp_sub_{DATA_VERSION}_{TRIAL_NO}_{t}.csv")
     to_pickle(model_path/f"second_model_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb3["models"])
 
+
+sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
 sub['scalar_coupling_constant'] = X_short_test['prediction']
 sub.to_csv(submit_path/f'submission_t_{DATA_VERSION}_{TRIAL_NO}.csv', index=False)
 print(sub.head())

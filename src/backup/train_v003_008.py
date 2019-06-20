@@ -218,11 +218,12 @@ def train_model_regression(X, X_test, y, params, folds, model_type='lgb', eval_m
         model_list += [model]
     prediction /= folds.n_splits
 
-    cv_score_msg = 'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
-    print(cv_score_msg)
     try:
+        cv_score_msg = f'{DATA_VERSION}_{TRIAL_NO}' +'CV mean score: {0:.4f}, std: {1:.4f}.'.format(np.mean(scores), np.std(scores))
+        print(cv_score_msg)
         send_message(cv_score_msg)
-    except:
+    except Exception as e:
+        print(e)
         pass
 
     result_dict["models"] = model_list
@@ -479,6 +480,22 @@ babel_cols = ['id', 'Angle', 'Torsion', 'cos2T', 'cosT', 'sp']
 babel_train = pd.read_csv("../processed/v003/babel_train.csv", usecols=babel_cols)
 babel_test = pd.read_csv("../processed/v003/babel_test.csv", usecols=babel_cols)
 
+rdkit_cols = ['id', 'a1_degree', 'a1_hybridization',
+              'a1_inring', 'a1_inring3', 'a1_inring4', 'a1_inring5', 'a1_inring6',
+              'a1_inring7', 'a1_inring8', 'a1_nb_h', 'a1_nb_o', 'a1_nb_c', 'a1_nb_n',
+              'a1_nb_na', 'a0_nb_degree', 'a0_nb_hybridization', 'a0_nb_inring',
+              'a0_nb_inring3', 'a0_nb_inring4', 'a0_nb_inring5', 'a0_nb_inring6',
+              'a0_nb_inring7', 'a0_nb_inring8', 'a0_nb_nb_h', 'a0_nb_nb_o',
+              'a0_nb_nb_c', 'a0_nb_nb_n', 'a0_nb_nb_na', 'x_a0_nb', 'y_a0_nb',
+              'z_a0_nb', 'a1_nb_degree', 'a1_nb_hybridization', 'a1_nb_inring',
+              'a1_nb_inring3', 'a1_nb_inring4', 'a1_nb_inring5', 'a1_nb_inring6',
+              'a1_nb_inring7', 'a1_nb_inring8', 'a1_nb_nb_h', 'a1_nb_nb_o',
+              'a1_nb_nb_c', 'a1_nb_nb_n', 'a1_nb_nb_na', 'x_a1_nb', 'y_a1_nb',
+              'z_a1_nb', 'dist_to_type_mean']
+# good_columns += [c for c in rdkit_cols if c != 'id']
+rdkit_train = pd.read_csv("../processed/v003/rdkit_train.csv", usecols=rdkit_cols)
+rdkit_test = pd.read_csv("../processed/v003/rdkit_test.csv", usecols=rdkit_cols)
+
 ####################################################################################################
 # Feature Engineering
 
@@ -531,6 +548,9 @@ test = test.merge(test_add, on="id", how="left")
 
 train = train.merge(babel_train, on="id", how="left")
 test = test.merge(babel_test, on="id", how="left")
+
+train = train.merge(rdkit_train, on="id", how="left")
+test = test.merge(rdkit_test, on="id", how="left")
 
 ob_charges = pd.read_csv("../processed/v003/ob_charges.csv", index_col=0)
 train = map_ob_charges(train, 0)
