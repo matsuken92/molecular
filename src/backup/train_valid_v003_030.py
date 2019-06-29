@@ -30,6 +30,7 @@ import seaborn as sns
 import lightgbm as lgb
 import xgboost as xgb
 from catboost import CatBoostRegressor
+from sklearn.model_selection import train_test_split
 
 
 def group_mean_log_mae(y_true, y_pred, types, floor=1e-9):
@@ -39,6 +40,66 @@ def group_mean_log_mae(y_true, y_pred, types, floor=1e-9):
     """
     maes = (y_true - y_pred).abs().groupby(types).mean()
     return np.log(maes.map(lambda x: max(x, floor))).mean()
+
+def hold_out_lgb_validation(X, y, params, eval_metric='mae', columns=None,
+                           plot_feature_importance=False,
+                           verbose=10000, early_stopping_rounds=200, n_estimators=50000, ):
+    columns = X.columns if columns is None else columns
+
+    # to set up scoring parameters
+    metrics_dict = {'mae': {'lgb_metric_name': 'mae',
+                            'catboost_metric_name': 'MAE',
+                            'sklearn_scoring_function': metrics.mean_absolute_error},
+                    'group_mae': {'lgb_metric_name': 'mae',
+                                  'catboost_metric_name': 'MAE',
+                                  'scoring_function': group_mean_log_mae},
+                    'mse': {'lgb_metric_name': 'mse',
+                            'catboost_metric_name': 'MSE',
+                            'sklearn_scoring_function': metrics.mean_squared_error}
+                    }
+
+    result_dict = {}
+
+    X_train, X_valid, y_train, y_valid = train_test_split(X[columns], y, test_size=0.1, random_state=42)
+    eval_result = {}
+    callbacks = [lgb.record_evaluation(eval_result)]
+    model = lgb.LGBMRegressor(**params, n_estimators=n_estimators, n_jobs=-1)
+    model.fit(X_train, y_train,
+              eval_set=[(X_train, y_train), (X_valid, y_valid)],
+              eval_metric=metrics_dict[eval_metric]['lgb_metric_name'],
+              verbose=verbose, early_stopping_rounds=early_stopping_rounds,
+              callbacks=callbacks)
+
+    y_pred_valid = model.predict(X_valid)
+
+    if eval_metric != 'group_mae':
+        score = metrics_dict[eval_metric]['sklearn_scoring_function'](y_valid, y_pred_valid)
+    else:
+        score = metrics_dict[eval_metric]['scoring_function'](y_valid, y_pred_valid, X_valid['type'])
+
+
+    if plot_feature_importance:
+        # feature importance
+        feature_importance = pd.DataFrame()
+        feature_importance["feature"] = columns
+        feature_importance["importance"] = model.feature_importances_
+    else:
+        feature_importance = None
+
+    try:
+        cv_score_msg = f'{DATA_VERSION}_{TRIAL_NO}' + f'HOLD_OUT score: {score:.4f} .'
+        print(cv_score_msg)
+        send_message(cv_score_msg)
+    except Exception as e:
+        print(e)
+        pass
+
+    result_dict["model"] = model
+    result_dict['y_pred_valid'] = pd.DataFrame(y_pred_valid, index=X_valid.index, columns=["scalar_coupling_constant"])
+    result_dict['score'] = score
+    result_dict["importance"] = feature_importance
+    result_dict["eval_result"] = eval_result
+    return result_dict
 
 
 def train_lgb_regression_alldata(X, X_test, y, params, eval_metric='mae', columns=None,
@@ -76,13 +137,16 @@ def train_lgb_regression_alldata(X, X_test, y, params, eval_metric='mae', column
 
     result_dict = {}
 
+    eval_result = {}
+    callbacks = [lgb.record_evaluation(eval_result)]
     model = lgb.LGBMRegressor(**params, n_estimators=n_estimators, n_jobs=-1)
     model.fit(X_train, y_train,
               eval_set=[(X_train, y_train)],
               eval_metric=metrics_dict[eval_metric]['lgb_metric_name'],
-              verbose=verbose)
+              verbose=verbose, callbacks=callbacks)
 
     result_dict['prediction'] = model.predict(X_test)
+    result_dict["eval_result"] = eval_result
 
     if plot_feature_importance:
         # feature importance
@@ -381,6 +445,9 @@ TRIAL_NO = __file__.split("_")[-1].replace(".py","")
 sys.path.append(".")
 import importlib
 use_cols = importlib.import_module(f'use_cols_{DATA_VERSION}_{TRIAL_NO}')
+use_cols.good_columns += [c for c in use_cols.rdkit_cols if c != 'id']
+use_cols.good_columns += [c for c in use_cols.babel_cols if c != 'id']
+use_cols.good_columns = np.unique(use_cols.good_columns).tolist()
 # use_cols = importlib.import_module(f'use_cols')
 print(use_cols.good_columns)
 
@@ -393,7 +460,6 @@ submit_path.mkdir(parents=True, exist_ok=True)
 log_path = Path(f"../log/{DATA_VERSION}_{TRIAL_NO}")
 log_path.mkdir(parents=True, exist_ok=True)
 
-
 ####################################################################################################
 # Data Loading
 file_folder = '../input'
@@ -401,7 +467,7 @@ sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
 train = pd.read_csv(f'{file_folder}/train.csv')
 mol_name = train.molecule_name.values
 
-if True:
+if False:
     test = pd.read_csv(f'{file_folder}/test.csv')
     structures = pd.read_csv(f'{file_folder}/structures.csv')
     scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
@@ -428,6 +494,8 @@ if True:
     ob_charges = pd.read_csv(save_path/"ob_charges.csv", index_col=0)
 
     tda_radius_df = pd.read_csv(save_path/"tda_radius_df.csv", index_col=0)
+
+    tda_radius_df_03 = pd.read_csv(save_path / "tda_radius_df_v003.csv", index_col=0)
 
     ####################################################################################################
     # Feature Engineering
@@ -493,6 +561,9 @@ if True:
     train = train.merge(tda_radius_df, on="molecule_name", how="left")
     test = test.merge(tda_radius_df, on="molecule_name", how="left")
 
+    train = train.merge(tda_radius_df_03, on="molecule_name", how="left")
+    test = test.merge(tda_radius_df_03, on="molecule_name", how="left")
+
     train = map_ob_charges(train, 0)
     train = map_ob_charges(train, 1)
     test = map_ob_charges(test, 0)
@@ -512,13 +583,21 @@ if True:
     to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/train_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
     to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/test_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
 else:
-    train = unpickle(save_path/f"{DATA_VERSION}_018/train_concat_{DATA_VERSION}_018.pkl", )
-    test = unpickle(save_path/f"{DATA_VERSION}_018/test_concat_{DATA_VERSION}_018.pkl", )
+    train = unpickle(save_path/f"v003_029/train_concat_v003_029.pkl", )
+    test = unpickle(save_path/f"v003_029/test_concat_v003_029.pkl", )
 
+###################################################################################################
+# add additional feature for trying
+pca_feat = unpickle(save_path/"pca_feat_df.pkl")
+train = train.merge(pca_feat, on="molecule_name", how="left")
+test = test.merge(pca_feat, on="molecule_name", how="left")
+
+###################################################################################################
+# final data preparation for train
 X = train[use_cols.good_columns].copy()
 y = train['scalar_coupling_constant']
-y_fc = train['fc']
 X_test = test[use_cols.good_columns].copy()
+print(f"X.shape: {X.shape}, X_test.shape: {X_test.shape}")
 
 # export colnames
 pd.DataFrame({"columns": X.columns.tolist()}).to_csv(log_path/f"use_cols.csv")
@@ -526,128 +605,45 @@ pd.DataFrame({"columns": X.columns.tolist()}).to_csv(log_path/f"use_cols.csv")
 ####################################################################################################
 # Model Fitting
 print("start fitting")
-n_fold = 5
+seed = 71
+params = {'num_leaves': 128,
+          'min_child_samples': 79,
+          'objective': 'regression',
+          'max_depth': 9,
+          'learning_rate': 0.2,
+          "boosting_type": "gbdt",
+          "subsample_freq": 1,
+          "subsample": 0.9,
+          "metric": 'mae',
+          "verbosity": -1,
+          'reg_alpha': 0.1,
+          'reg_lambda': 0.3,
+          'colsample_bytree': 1.0,
+          'num_threads' : -1,
+         }
 
-if GROUP_K_FOLD:
-    folds = GroupKFold(n_splits=n_fold)
-else:
-    folds = KFold(n_splits=n_fold, shuffle=True, random_state=11)
+params["seed"] = seed
+params["bagging_seed"] = seed + 1
+params["feature_fraction_seed"] = seed + 2
 
-#########################################################################################################
-# 1st layer model
+result_dict_lgb = hold_out_lgb_validation(X=X,
+                                          y=y,
+                                          params=params,
+                                          eval_metric='group_mae',
+                                          plot_feature_importance=True,
+                                          verbose=500,
+                                          early_stopping_rounds=200,
+                                          n_estimators=8000)
 
-seed_list = np.array([0, 2019, 71, 1228, 1988, 1879, 92, 3018, 1234, 185289])
-# seed_list = np.array([1, 2020, 72, 1229, 1989, 1880, 93, 3019, 1235, 185290])
+to_pickle(model_path / f"hold_out_model_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", result_dict_lgb["model"])
+result_dict_lgb['y_pred_valid'].to_csv(submit_path/f'holdout_pred_{DATA_VERSION}_{TRIAL_NO}_{seed}.csv', index=True)
+result_dict_lgb["importance"].to_csv(log_path/f'importance_{DATA_VERSION}_{TRIAL_NO}_{seed}.csv', index=True)
+print(f"oof_log_mae: {result_dict_lgb['score']}")
 
-for seed in seed_list:
-    print(f"==================== seed: {seed} ====================")
-    params = {'num_leaves': 128,
-              'min_child_samples': 79,
-              'objective': 'regression',
-              'max_depth': 9,
-              'learning_rate': 0.2,
-              "boosting_type": "gbdt",
-              "subsample_freq": 1,
-              "subsample": 0.9,
-              "metric": 'mae',
-              "verbosity": -1,
-              'reg_alpha': 0.1,
-              'reg_lambda': 0.3,
-              'colsample_bytree': 1.0,
-              'num_threads' : -1,
-             }
-
-    params["seed"] = seed
-    params["bagging_seed"] = seed + 1
-    params["feature_fraction_seed"] = seed + 2
-    USE_PREV_1st_MODEL =  False
-    if not USE_PREV_1st_MODEL:
-        result_dict_lgb1 = train_model_regression(X=X,
-                                                  X_test=X_test,
-                                                  y=y_fc,
-                                                  params=params,
-                                                  folds=folds,
-                                                  model_type='lgb',
-                                                  eval_metric='group_mae',
-                                                  plot_feature_importance=False,
-                                                  verbose=500,
-                                                  early_stopping_rounds=200,
-                                                  n_estimators=8000,
-                                                  fold_group=mol_name if GROUP_K_FOLD else None)
-        X['oof_fc'] = result_dict_lgb1['oof']
-        X_test['oof_fc'] = result_dict_lgb1['prediction']
-        to_pickle(submit_path/f"train_oof_fc_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", X['oof_fc'])
-        to_pickle(submit_path/f"test_oof_fc_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", X_test['oof_fc'])
-        to_pickle(model_path/f"first_model_list_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", result_dict_lgb1["models"])
-    else:
-        X['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/train_oof_fc_{DATA_VERSION}_019.pkl", )
-        X_test['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/test_oof_fc_{DATA_VERSION}_019.pkl", )
-
-    #########################################################################################################
-    # 2nd layer model
-    X_short = pd.DataFrame({'ind': list(X.index), 'type': X['type'].values, 'oof': [0] * len(X), 'target': y.values})
-    X_short_test = pd.DataFrame({'ind': list(X_test.index), 'type': X_test['type'].values, 'prediction': [0] * len(X_test)})
-
-    params["seed"] = seed + 3
-    params["bagging_seed"] = seed + 4
-    params["feature_fraction_seed"] = seed + 5
-    print(f"X['type'].unique(): {X['type'].unique()}")
-    for t in X['type'].unique():
-        print(f'{current_time()zs} Training of type {t}')
-        X_t = X.loc[X['type'] == t]
-        X_test_t = X_test.loc[X_test['type'] == t]
-        y_t = X_short.loc[X_short['type'] == t, 'target']
-        mol_name_t = mol_name[X_t.index] if GROUP_K_FOLD else None
-        print(f"X_t.shape: {X_t.shape}, X_test_t.shape: {X_test_t.shape}, y_t.shape: {y_t.shape}")
-
-        if TRAIN_ALL_DATA:
-            result_dict_lgb3 = train_lgb_regression_alldata(X=X_t,
-                                                      X_test=X_test_t,
-                                                      y=y_t,
-                                                      params=params,
-                                                      eval_metric='group_mae',
-                                                      plot_feature_importance=True,
-                                                      verbose=500,
-                                                      n_estimators=20000,
-                                                      mol_type=t)
-        else:
-            result_dict_lgb3 = train_model_regression(X=X_t,
-                                                      X_test=X_test_t,
-                                                      y=y_t,
-                                                      params=params,
-                                                      folds=folds,
-                                                      model_type='lgb',
-                                                      eval_metric='group_mae',
-                                                      plot_feature_importance=True,
-                                                      verbose=500,
-                                                      early_stopping_rounds=200,
-                                                      n_estimators=15000,
-                                                      mol_type=t, fold_group=mol_name_t)
-
-
-            X_short.loc[X_short['type'] == t, 'oof'] = result_dict_lgb3['oof']
-            X_short.to_csv(submit_path/f"tmp_oof_{t}.csv")
-
-        X_short_test.loc[X_short_test['type'] == t, 'prediction'] = result_dict_lgb3['prediction']
-        X_short_test.to_csv(submit_path/f"tmp_sub_{t}.csv")
-         ##to_pickle(model_path/f"second_model_list_{DATA_VERSION}_{TRIAL_NO}.pkl", result_dict_lgb3["models"])
-
-    #########################################################################################################
-    # create oof & submission file.
-    sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
-    sub['scalar_coupling_constant'] = X_short_test['prediction']
-    sub.to_csv(submit_path/f'submission_t_{DATA_VERSION}_{TRIAL_NO}_{seed}.csv', index=False)
-    print(sub.head())
-
-    if not TRAIN_ALL_DATA:
-        oof_log_mae = group_mean_log_mae(X_short['target'], X_short['oof'], X_short['type'], floor=1e-9)
-        print(f"oof_log_mae: {oof_log_mae}")
-
-        df_oof = pd.DataFrame(index=train.id)
-        df_oof["scalar_coupling_constant"] = X_short['oof']
-        df_oof.to_csv(submit_path/f'oof_{DATA_VERSION}_{TRIAL_NO}_{seed}.csv', index=True)
-        send_message(f"finish train_{DATA_VERSION}_{TRIAL_NO}_{seed}, oof_log_mae: {oof_log_mae}")
-    else:
-        send_message(f"finish train_{DATA_VERSION}_{TRIAL_NO}_{seed}")
+eval_result = result_dict_lgb["eval_result"]["valid_0"]["l1"]
+training_log_df = pd.DataFrame(eval_result, index=np.arange(len(eeval_result))+1)
+training_log_df.columns= ["l1"]
+training_log_df.index.name = "iter"
+training_log_df.to_csv(log_path/f"train_log_{DATA_VERSION}_{TRIAL_NO}.csv")
 
 print(f"finished. : {current_time()}")

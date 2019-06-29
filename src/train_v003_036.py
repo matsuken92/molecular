@@ -381,6 +381,9 @@ TRIAL_NO = __file__.split("_")[-1].replace(".py","")
 sys.path.append(".")
 import importlib
 use_cols = importlib.import_module(f'use_cols_{DATA_VERSION}_{TRIAL_NO}')
+use_cols.good_columns += [c for c in use_cols.rdkit_cols if c != 'id']
+use_cols.good_columns += [c for c in use_cols.babel_cols if c != 'id']
+use_cols.good_columns = np.unique(use_cols.good_columns).tolist()
 # use_cols = importlib.import_module(f'use_cols')
 print(use_cols.good_columns)
 
@@ -401,7 +404,7 @@ sub = pd.read_csv(f'{file_folder}/sample_submission.csv')
 train = pd.read_csv(f'{file_folder}/train.csv')
 mol_name = train.molecule_name.values
 
-if True:
+if False:
     test = pd.read_csv(f'{file_folder}/test.csv')
     structures = pd.read_csv(f'{file_folder}/structures.csv')
     scalar_coupling_contributions = pd.read_csv(f'{file_folder}/scalar_coupling_contributions.csv')
@@ -428,6 +431,8 @@ if True:
     ob_charges = pd.read_csv(save_path/"ob_charges.csv", index_col=0)
 
     tda_radius_df = pd.read_csv(save_path/"tda_radius_df.csv", index_col=0)
+
+    pca_feat = unpickle(save_path / "pca_feat_df.pkl")
 
     ####################################################################################################
     # Feature Engineering
@@ -493,6 +498,9 @@ if True:
     train = train.merge(tda_radius_df, on="molecule_name", how="left")
     test = test.merge(tda_radius_df, on="molecule_name", how="left")
 
+    train = train.merge(pca_feat, on="molecule_name", how="left")
+    test = test.merge(pca_feat, on="molecule_name", how="left")
+
     train = map_ob_charges(train, 0)
     train = map_ob_charges(train, 1)
     test = map_ob_charges(test, 0)
@@ -512,13 +520,21 @@ if True:
     to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/train_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", train)
     to_pickle(save_path/f"{DATA_VERSION}_{TRIAL_NO}/test_concat_{DATA_VERSION}_{TRIAL_NO}.pkl", test)
 else:
-    train = unpickle(save_path/f"{DATA_VERSION}_018/train_concat_{DATA_VERSION}_018.pkl", )
-    test = unpickle(save_path/f"{DATA_VERSION}_018/test_concat_{DATA_VERSION}_018.pkl", )
+    train = unpickle(save_path/f"v003_033/train_concat_v003_033.pkl", )
+    test = unpickle(save_path/f"v003_033/test_concat_v003_033.pkl", )
 
-X = train[use_cols.good_columns].copy()
+###################################################################################################
+# add additional feature for trying
+
+
+###################################################################################################
+use_cols_revised = [c for c in use_cols.good_columns if c not in use_cols.remove_cols]
+
+X = train[use_cols_revised].copy()
 y = train['scalar_coupling_constant']
 y_fc = train['fc']
-X_test = test[use_cols.good_columns].copy()
+X_test = test[use_cols_revised].copy()
+print(f"X.shape: {X.shape}, X_test.shape: {X_test.shape}")
 
 # export colnames
 pd.DataFrame({"columns": X.columns.tolist()}).to_csv(log_path/f"use_cols.csv")
@@ -535,9 +551,15 @@ else:
 
 #########################################################################################################
 # 1st layer model
+seed_base = [2019, 71, 1228, 1988, 1879, 92, 3018, 1234, 185289]
+#seed_base = [0, 2019, 71, 1228, 1988, 1879, 92, 3018, 1234, 185289]
+seed_list = np.array(seed_base) + 20
+#seed_list = np.array(seed_base) + 21
+#seed_list = np.array(seed_base) + 22
+#seed_list = np.array(seed_base) + 23
+#seed_list = np.array(seed_base) + 24
 
-seed_list = np.array([0, 2019, 71, 1228, 1988, 1879, 92, 3018, 1234, 185289])
-# seed_list = np.array([1, 2020, 72, 1229, 1989, 1880, 93, 3019, 1235, 185290])
+current_seed = 2039
 
 for seed in seed_list:
     print(f"==================== seed: {seed} ====================")
@@ -560,7 +582,9 @@ for seed in seed_list:
     params["seed"] = seed
     params["bagging_seed"] = seed + 1
     params["feature_fraction_seed"] = seed + 2
-    USE_PREV_1st_MODEL =  False
+
+    # USE_PREV_1st_MODEL = False
+    USE_PREV_1st_MODEL = True if seed == current_seed else False
     if not USE_PREV_1st_MODEL:
         result_dict_lgb1 = train_model_regression(X=X,
                                                   X_test=X_test,
@@ -572,7 +596,7 @@ for seed in seed_list:
                                                   plot_feature_importance=False,
                                                   verbose=500,
                                                   early_stopping_rounds=200,
-                                                  n_estimators=8000,
+                                                  n_estimators=10000,
                                                   fold_group=mol_name if GROUP_K_FOLD else None)
         X['oof_fc'] = result_dict_lgb1['oof']
         X_test['oof_fc'] = result_dict_lgb1['prediction']
@@ -580,20 +604,30 @@ for seed in seed_list:
         to_pickle(submit_path/f"test_oof_fc_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", X_test['oof_fc'])
         to_pickle(model_path/f"first_model_list_{DATA_VERSION}_{TRIAL_NO}_{seed}.pkl", result_dict_lgb1["models"])
     else:
-        X['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/train_oof_fc_{DATA_VERSION}_019.pkl", )
-        X_test['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/test_oof_fc_{DATA_VERSION}_019.pkl", )
+        X['oof_fc'] = unpickle("../submit/v003_036/train_oof_fc_v003_036_21.pkl")
+        X_test['oof_fc'] = unpickle("../submit/v003_036/test_oof_fc_v003_036_21.pkl")
+
+        #X['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/train_oof_fc_{DATA_VERSION}_019.pkl", )
+        #X_test['oof_fc'] = unpickle(f"../submit/{DATA_VERSION}_019/test_oof_fc_{DATA_VERSION}_019.pkl", )
 
     #########################################################################################################
     # 2nd layer model
     X_short = pd.DataFrame({'ind': list(X.index), 'type': X['type'].values, 'oof': [0] * len(X), 'target': y.values})
-    X_short_test = pd.DataFrame({'ind': list(X_test.index), 'type': X_test['type'].values, 'prediction': [0] * len(X_test)})
+
+    if seed==current_seed:
+        X_short_test = pd.read_csv(submit_path/f"tmp_oof_6.csv")
+    else:
+        X_short_test = pd.DataFrame(
+            {'ind': list(X_test.index), 'type': X_test['type'].values, 'prediction': [0] * len(X_test)})
 
     params["seed"] = seed + 3
     params["bagging_seed"] = seed + 4
     params["feature_fraction_seed"] = seed + 5
     print(f"X['type'].unique(): {X['type'].unique()}")
     for t in X['type'].unique():
-        print(f'{current_time()zs} Training of type {t}')
+        if seed==current_seed and t in [0, 3, 1, 4] : continue   # [0, 3, 1, 4, 2, 6]
+
+        print(f'{current_time()} Training of type {t}')
         X_t = X.loc[X['type'] == t]
         X_test_t = X_test.loc[X_test['type'] == t]
         y_t = X_short.loc[X_short['type'] == t, 'target']
@@ -608,7 +642,7 @@ for seed in seed_list:
                                                       eval_metric='group_mae',
                                                       plot_feature_importance=True,
                                                       verbose=500,
-                                                      n_estimators=20000,
+                                                      n_estimators=23000,
                                                       mol_type=t)
         else:
             result_dict_lgb3 = train_model_regression(X=X_t,
